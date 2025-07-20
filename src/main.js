@@ -12,7 +12,7 @@ const SUBSCRIPTION_REQUEST = {
   args: [{
     exchange: "binance",
     category: "candle",
-    topic: "BTCUSDT:1m"
+    topic: "candle.BTCUSDT.1"
   }]
 }
 
