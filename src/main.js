@@ -29,6 +29,11 @@ let isConnected = false
 let dataUpdateCount = 0
 let hasRealData = false
 
+// 1-minute candle tracking
+let currentCandleStartTime = null
+let firstMessageOfCandle = null
+let lastMessageOfCandle = null
+
 // Initialize the application
 function init() {
   setupHTML()
@@ -576,83 +581,160 @@ function handleCandleData(data) {
   }
 
   candleArray.forEach((candle, index) => {
-    // Handle different possible data formats
-    let timestamp, open, high, low, close, volume, startTime, endTime
-
-    if (Array.isArray(candle)) {
-      // If candle is an array: [timestamp, open, high, low, close, volume]
-      [timestamp, open, high, low, close, volume] = candle
-      // For array format, assume candle is closed (no start/end time filtering)
-      startTime = timestamp
-      endTime = timestamp + 1 // Make them different so it passes the filter
-    } else if (typeof candle === 'object') {
-      // Handle ARCA API format and other common formats
-      startTime = candle.st || candle.start_time
-      endTime = candle.et || candle.end_time
-      timestamp = endTime || startTime || candle.timestamp || candle.time || candle.t
-      open = candle.o || candle.open
-      high = candle.h || candle.high
-      low = candle.l || candle.low
-      close = candle.c || candle.close
-      volume = candle.v || candle.volume || 0
-
-      // Filter out candles where start time equals end time (incomplete/open candles)
-      if (startTime && endTime && startTime === endTime) {
-        console.log('Skipping incomplete candle (st === et):', { st: startTime, et: endTime })
-        return // Skip this candle as it's not closed yet
-      }
-    } else {
-      return
-    }
-
-    // Convert candle data to night-vision format: [timestamp, open, high, low, close, volume]
-    // Ensure timestamp is in milliseconds
-    let ts = parseInt(timestamp)
-    if (ts < 1000000000000) { // If timestamp is in seconds, convert to milliseconds
-      ts = ts * 1000
-    }
-
-    const formattedCandle = [
-      ts,
-      parseFloat(open),
-      parseFloat(high),
-      parseFloat(low),
-      parseFloat(close),
-      parseFloat(volume || 0)
-    ]
-
-    // Validate the formatted candle
-    if (formattedCandle.some(val => isNaN(val))) {
-      return
-    }
-
-    // Update or add candle data
-    const existingIndex = candleData.findIndex(c => c[0] === ts)
-
-    if (existingIndex >= 0) {
-      // Update existing candle
-      candleData[existingIndex] = formattedCandle
-    } else {
-      // Add new candle
-      candleData.push(formattedCandle)
-
-      // Keep only last 200 candles for performance
-      if (candleData.length > 200) {
-        candleData = candleData.slice(-200)
-      }
-    }
+    processCandle(candle)
   })
+}
+
+// Process each candle - create 1-minute candles
+function processCandle(candle) {
+  // Extract data from different formats
+  let timestamp, open, high, low, close, volume
+
+  if (Array.isArray(candle)) {
+    // If candle is an array: [timestamp, open, high, low, close, volume]
+    [timestamp, open, high, low, close, volume] = candle
+  } else if (typeof candle === 'object') {
+    // Handle ARCA API format and other common formats
+    timestamp = candle.timestamp || candle.st || candle.time || candle.t
+    open = candle.o || candle.open
+    high = candle.h || candle.high
+    low = candle.l || candle.low
+    close = candle.c || candle.close
+    volume = candle.v || candle.volume || 0
+  } else {
+    return
+  }
+
+  // Validate required fields
+  if (!timestamp || isNaN(parseFloat(open)) || isNaN(parseFloat(high)) ||
+      isNaN(parseFloat(low)) || isNaN(parseFloat(close))) {
+    console.log('❌ Invalid candle data, skipping:', candle)
+    return
+  }
+
+  // Convert to milliseconds if needed
+  let ts = parseInt(timestamp)
+  if (ts < 1000000000000) {
+    ts = ts * 1000
+  }
+
+  // Create message object
+  const message = {
+    timestamp: ts,
+    open: parseFloat(open),
+    high: parseFloat(high),
+    low: parseFloat(low),
+    close: parseFloat(close),
+    volume: parseFloat(volume || 0)
+  }
+
+  console.log('📨 Processing message:', new Date(ts).toISOString(), message)
+
+  // Check if we need to start a new 1-minute candle
+  if (currentCandleStartTime === null) {
+    // First message - start new candle
+    startNewCandle(message)
+  } else {
+    // Check time difference
+    const timeDiff = message.timestamp - currentCandleStartTime
+    console.log('⏱️ Time diff:', timeDiff, 'ms (', Math.round(timeDiff / 1000), 'seconds )')
+
+    if (timeDiff >= 60000) { // 1 minute = 60000ms
+      // Time difference >= 1 minute - create new candle
+      console.log('🆕 1 MINUTE PASSED - Creating new candle')
+      finishCurrentCandle()
+      startNewCandle(message)
+    } else {
+      // Time difference < 1 minute - update current candle
+      console.log('🔄 UPDATING current candle (same minute)')
+      updateCurrentCandle(message)
+    }
+  }
+}
+
+// Start a new 1-minute candle
+function startNewCandle(message) {
+  currentCandleStartTime = message.timestamp
+  firstMessageOfCandle = message
+  lastMessageOfCandle = message
+
+  console.log('🚀 STARTED new candle at:', new Date(currentCandleStartTime).toISOString())
+
+  // Add to chart immediately
+  addOrUpdateCandleInChart()
+}
+
+// Update the current candle with new message
+function updateCurrentCandle(message) {
+  lastMessageOfCandle = message
+  console.log('📝 Updated current candle with latest data')
+
+  // Update chart
+  addOrUpdateCandleInChart()
+}
+
+// Finish current candle (when starting new one)
+function finishCurrentCandle() {
+  if (currentCandleStartTime && firstMessageOfCandle && lastMessageOfCandle) {
+    console.log('✅ FINISHED candle for period:',
+      new Date(currentCandleStartTime).toISOString(),
+      'to',
+      new Date(lastMessageOfCandle.timestamp).toISOString())
+  }
+}
+
+// Add or update candle in chart
+function addOrUpdateCandleInChart() {
+  if (!currentCandleStartTime || !firstMessageOfCandle || !lastMessageOfCandle) {
+    return
+  }
+
+  // Build candle using:
+  // - timestamp: start time of the candle
+  // - open: from first message
+  // - close: from last message
+  // - high: max of first and last
+  // - low: min of first and last
+  // - volume: from last message
+  const formattedCandle = [
+    currentCandleStartTime,
+    firstMessageOfCandle.open,
+    Math.max(firstMessageOfCandle.high, lastMessageOfCandle.high),
+    Math.min(firstMessageOfCandle.low, lastMessageOfCandle.low),
+    lastMessageOfCandle.close,
+    lastMessageOfCandle.volume
+  ]
+
+  // Check if candle already exists in chart
+  const existingIndex = candleData.findIndex(c => c[0] === currentCandleStartTime)
+
+  if (existingIndex >= 0) {
+    // UPDATE existing candle
+    candleData[existingIndex] = formattedCandle
+    console.log('🔄 UPDATED chart candle:', new Date(currentCandleStartTime).toISOString())
+  } else {
+    // ADD new candle
+    candleData.push(formattedCandle)
+    console.log('➕ ADDED new chart candle:', new Date(currentCandleStartTime).toISOString())
+
+    // Keep only last 200 candles for performance
+    if (candleData.length > 200) {
+      candleData = candleData.slice(-200)
+    }
+  }
 
   // Sort by timestamp to ensure proper order
   candleData.sort((a, b) => a[0] - b[0])
 
-  // Update the chart immediately for real-time data
+  // Update the chart
   dataUpdateCount++
   updateChart()
 
-  // Update status to show data is being received
-  updateStatus(`Live - ${dataUpdateCount} updates`, 'connected')
+  // Update status
+  updateStatus(`Live - ${candleData.length} candles`, 'connected')
 }
+
+
 
 // Handle WebSocket connection close
 function handleWebSocketClose(event) {
