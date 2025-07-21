@@ -27,6 +27,7 @@ let chart = null
 let candleData = []
 let isConnected = false
 let dataUpdateCount = 0
+let hasRealData = false
 
 // Initialize the application
 function init() {
@@ -39,66 +40,275 @@ function init() {
 function setupHTML() {
   document.querySelector('#app').innerHTML = `
     <style>
-      body {
-        background-color: #0c0d0e;
-        color: #ffffff;
-        font-family: Arial, sans-serif;
+      * {
         margin: 0;
-        padding: 20px;
+        padding: 0;
+        box-sizing: border-box;
       }
+
+      body {
+        background: linear-gradient(135deg, #0c0e16 0%, #161b22 100%);
+        color: #d1d5db;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+
+      .header {
+        background: rgba(22, 27, 34, 0.95);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+        padding: 16px 24px;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        box-shadow: 0 2px 20px rgba(0, 0, 0, 0.3);
+      }
+
+      .header-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
+      .title {
+        font-size: 24px;
+        font-weight: 600;
+        color: #f7fafc;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .symbol-badge {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        color: #000;
+        padding: 4px 12px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+      }
+
+      .header-info {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 14px;
+      }
+
+      .price-info {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+      }
+
+      .current-price {
+        font-size: 18px;
+        font-weight: 600;
+        color: #10b981;
+      }
+
+      .price-change {
+        font-size: 12px;
+        color: #6b7280;
+      }
+
+      #status {
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .connected {
+        background: rgba(16, 185, 129, 0.1);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+      }
+      .connected .status-dot { background: #10b981; }
+
+      .disconnected {
+        background: rgba(239, 68, 68, 0.1);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+      }
+      .disconnected .status-dot { background: #ef4444; }
+
+      .connecting {
+        background: rgba(245, 158, 11, 0.1);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+      }
+      .connecting .status-dot { background: #f59e0b; }
+
+      .chart-wrapper {
+        padding: 24px;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+
       #chart-container {
         width: 100%;
-        height: 600px;
-        margin-top: 20px;
+        height: calc(100vh - 140px);
+        min-height: 600px;
+        background: rgba(22, 27, 34, 0.8);
+        border-radius: 12px;
+        border: 1px solid rgba(48, 54, 61, 0.5);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+        position: relative;
       }
-      #status {
-        margin-bottom: 10px;
-        padding: 10px;
-        border-radius: 4px;
-        font-weight: bold;
+
+      .chart-overlay {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        background: rgba(22, 27, 34, 0.9);
+        backdrop-filter: blur(10px);
+        padding: 12px 16px;
+        border-radius: 8px;
+        border: 1px solid rgba(48, 54, 61, 0.5);
+        font-size: 12px;
+        color: #9ca3af;
+        z-index: 10;
       }
-      .connected { background-color: #1a4d1a; }
-      .disconnected { background-color: #4d1a1a; }
-      .connecting { background-color: #4d4d1a; }
+
+      .user-id {
+        font-size: 11px;
+        color: #6b7280;
+        font-family: 'Courier New', monospace;
+      }
+
+      @media (max-width: 768px) {
+        .header-content {
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .header-info {
+          width: 100%;
+          justify-content: space-between;
+        }
+
+        .chart-wrapper {
+          padding: 16px;
+        }
+
+        #chart-container {
+          height: calc(100vh - 180px);
+        }
+      }
     </style>
-    <h1>BTCUSDT Real-time Candlestick Chart</h1>
-    <div style="margin-bottom: 10px; font-size: 14px; color: #888;">User ID: ${USER_ID}</div>
-    <div id="status" class="disconnected">Disconnected</div>
-    <div id="chart-container"></div>
+
+    <div class="header">
+      <div class="header-content">
+        <div class="title">
+          <span class="symbol-badge">BTCUSDT</span>
+          <span>Real-time Chart</span>
+        </div>
+        <div class="header-info">
+          <div class="price-info">
+            <div class="current-price" id="current-price">--</div>
+            <div class="price-change" id="price-change">--</div>
+          </div>
+          <div id="status" class="disconnected">
+            <div class="status-dot"></div>
+            <span>Disconnected</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-wrapper">
+      <div id="chart-container">
+        <div class="chart-overlay">
+          <div class="user-id">Session: ${USER_ID}</div>
+        </div>
+      </div>
+    </div>
   `
 }
 
 // Initialize the night-vision chart
 function initChart() {
+  const container = document.getElementById('chart-container')
+  const containerRect = container.getBoundingClientRect()
+
   chart = new NightVision('chart-container', {
-    width: window.innerWidth - 40,
-    height: 600
+    width: containerRect.width,
+    height: containerRect.height
   })
 
-  // Start with empty data - real data will come from WebSocket
-  candleData = []
+  // Add some initial test data to verify chart works
+  // addInitialTestData()
 
   // Initial chart setup
   updateChart()
+}
+
+// Add initial test data to show chart is working
+function addInitialTestData() {
+  const now = Date.now()
+  const testData = []
+
+  // Generate 20 test candles
+  let basePrice = 118000
+  for (let i = 0; i < 20; i++) {
+    const timestamp = now - (20 - i) * 60000 // 1 minute intervals
+    const open = basePrice + (Math.random() - 0.5) * 100
+    const close = open + (Math.random() - 0.5) * 200
+    const high = Math.max(open, close) + Math.random() * 100
+    const low = Math.min(open, close) - Math.random() * 100
+    const volume = Math.random() * 10
+
+    testData.push([timestamp, open, high, low, close, volume])
+    basePrice = close // Use previous close as base for next candle
+  }
+
+  candleData = testData
 }
 
 
 
 // Update chart with current candle data
 function updateChart() {
-  if (!chart || candleData.length === 0) {
+  if (!chart) {
     return
   }
 
-  // Force chart update by setting new data
+  // Update price display
+  updatePriceDisplay()
+
+  // Create chart data structure
   const chartData = {
     panes: [{
       overlays: [{
         name: 'BTCUSDT',
         type: 'Candles',
-        data: [...candleData], // Create new array to force update
+        data: candleData.length > 0 ? [...candleData] : [],
         settings: {
-          precision: 2,
+          precision: 1,
           colorCandleUp: '#26a69a',
           colorCandleDw: '#ef5350',
           colorWickUp: '#26a69a',
@@ -108,19 +318,76 @@ function updateChart() {
     }]
   }
 
+  // Set chart data
   chart.data = chartData
 
-  // Try different methods to force chart update
-  try {
-    if (typeof chart.update === 'function') {
-      chart.update()
-    } else if (typeof chart.render === 'function') {
-      chart.render()
-    } else if (typeof chart.refresh === 'function') {
-      chart.refresh()
+  // Auto-scroll to show latest candles
+  if (candleData.length > 0) {
+    try {
+      // Get the latest timestamp
+      const latestTime = candleData[candleData.length - 1][0]
+      const earliestTime = candleData[0][0]
+
+      // Calculate visible range (show last 50 candles or all if less)
+      const visibleCandles = Math.min(50, candleData.length)
+      const timeRange = latestTime - earliestTime
+      const candleWidth = timeRange / Math.max(1, candleData.length - 1)
+      const visibleRange = candleWidth * visibleCandles
+
+      // Set the visible range to show latest candles
+      const rangeStart = latestTime - visibleRange
+      const rangeEnd = latestTime + (candleWidth * 2) // Add some padding
+
+      // Try to set the range for auto-scroll
+      if (chart.setRange) {
+        chart.setRange(rangeStart, rangeEnd)
+      } else if (chart.range) {
+        chart.range = [rangeStart, rangeEnd]
+      }
+    } catch (error) {
+      // Ignore range setting errors
     }
-  } catch (error) {
-    // Ignore chart update errors
+  }
+}
+
+// Update price display in header
+function updatePriceDisplay() {
+  if (candleData.length === 0) return
+
+  const latestCandle = candleData[candleData.length - 1]
+  const [timestamp, open, high, low, close, volume] = latestCandle
+
+  const currentPriceEl = document.getElementById('current-price')
+  const priceChangeEl = document.getElementById('price-change')
+
+  if (currentPriceEl && priceChangeEl) {
+    // Format price with proper decimals
+    const formattedPrice = close.toLocaleString('en-US', {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
+    })
+
+    currentPriceEl.textContent = `$${formattedPrice}`
+
+    // Calculate price change
+    if (candleData.length > 1) {
+      const previousCandle = candleData[candleData.length - 2]
+      const previousClose = previousCandle[4]
+      const change = close - previousClose
+      const changePercent = ((change / previousClose) * 100)
+
+      const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(1)} (${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%)`
+      priceChangeEl.textContent = changeText
+
+      // Update colors based on change
+      if (change >= 0) {
+        currentPriceEl.style.color = '#10b981'
+        priceChangeEl.style.color = '#10b981'
+      } else {
+        currentPriceEl.style.color = '#ef4444'
+        priceChangeEl.style.color = '#ef4444'
+      }
+    }
   }
 }
 
@@ -274,6 +541,12 @@ function handleParsedMessage(message) {
 
 // Handle candle data updates
 function handleCandleData(data) {
+  // Clear test data when real data arrives
+  if (!hasRealData) {
+    candleData = []
+    hasRealData = true
+  }
+
   // Handle different data formats that might come from MessagePack
   let candleArray = null
 
@@ -367,7 +640,7 @@ function handleCandleData(data) {
   updateChart()
 
   // Update status to show data is being received
-  updateStatus(`Connected - Receiving data (${dataUpdateCount} updates)`, 'connected')
+  updateStatus(`Live - ${dataUpdateCount} updates`, 'connected')
 }
 
 // Handle WebSocket connection close
@@ -388,7 +661,10 @@ function handleWebSocketError(error) {
 function updateStatus(message, className) {
   const statusElement = document.getElementById('status')
   if (statusElement) {
-    statusElement.textContent = message
+    statusElement.innerHTML = `
+      <div class="status-dot"></div>
+      <span>${message}</span>
+    `
     statusElement.className = className
   }
 }
@@ -407,9 +683,13 @@ function scheduleReconnect() {
 // Handle window resize
 function handleResize() {
   if (chart) {
-    // Update chart dimensions without recreating the entire chart
-    chart.width = window.innerWidth - 40
-    chart.height = 600
+    const container = document.getElementById('chart-container')
+    if (container) {
+      const containerRect = container.getBoundingClientRect()
+      // Update chart dimensions without recreating the entire chart
+      chart.width = containerRect.width
+      chart.height = containerRect.height
+    }
   }
 }
 
