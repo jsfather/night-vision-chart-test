@@ -577,19 +577,30 @@ function handleCandleData(data) {
 
   candleArray.forEach((candle, index) => {
     // Handle different possible data formats
-    let timestamp, open, high, low, close, volume
+    let timestamp, open, high, low, close, volume, startTime, endTime
 
     if (Array.isArray(candle)) {
       // If candle is an array: [timestamp, open, high, low, close, volume]
       [timestamp, open, high, low, close, volume] = candle
+      // For array format, assume candle is closed (no start/end time filtering)
+      startTime = timestamp
+      endTime = timestamp + 1 // Make them different so it passes the filter
     } else if (typeof candle === 'object') {
       // Handle ARCA API format and other common formats
-      timestamp = candle.st || candle.et || candle.timestamp || candle.time || candle.t
+      startTime = candle.st || candle.start_time
+      endTime = candle.et || candle.end_time
+      timestamp = endTime || startTime || candle.timestamp || candle.time || candle.t
       open = candle.o || candle.open
       high = candle.h || candle.high
       low = candle.l || candle.low
       close = candle.c || candle.close
       volume = candle.v || candle.volume || 0
+
+      // Filter out candles where start time equals end time (incomplete/open candles)
+      if (startTime && endTime && startTime === endTime) {
+        console.log('Skipping incomplete candle (st === et):', { st: startTime, et: endTime })
+        return // Skip this candle as it's not closed yet
+      }
     } else {
       return
     }
