@@ -10,8 +10,8 @@ const SUBSCRIPTION_REQUEST = {
   op: "subscribe",
   requestId: "btcusdt-candles",
   args: [{
-    exchange: "binance",
-    category: "candle",
+    exchange: "bybit",
+    category: "linear",
     topic: "candle.BTCUSDT.1"
   }]
 }
@@ -26,6 +26,7 @@ let ws = null
 let chart = null
 let candleData = []
 let isConnected = false
+let dataUpdateCount = 0
 
 // Initialize the application
 function init() {
@@ -74,20 +75,28 @@ function initChart() {
     height: 600
   })
 
-  // Initial empty chart setup
+  // Start with empty data - real data will come from WebSocket
+  candleData = []
+
+  // Initial chart setup
   updateChart()
 }
 
+
+
 // Update chart with current candle data
 function updateChart() {
-  if (!chart) return
+  if (!chart || candleData.length === 0) {
+    return
+  }
 
-  chart.data = {
+  // Force chart update by setting new data
+  const chartData = {
     panes: [{
       overlays: [{
         name: 'BTCUSDT',
         type: 'Candles',
-        data: candleData,
+        data: [...candleData], // Create new array to force update
         settings: {
           precision: 2,
           colorCandleUp: '#26a69a',
@@ -98,6 +107,21 @@ function updateChart() {
       }]
     }]
   }
+
+  chart.data = chartData
+
+  // Try different methods to force chart update
+  try {
+    if (typeof chart.update === 'function') {
+      chart.update()
+    } else if (typeof chart.render === 'function') {
+      chart.render()
+    } else if (typeof chart.refresh === 'function') {
+      chart.refresh()
+    }
+  } catch (error) {
+    // Ignore chart update errors
+  }
 }
 
 // Connect to WebSocket
@@ -106,7 +130,6 @@ function connectWebSocket() {
 
   try {
     const wsUrl = getWebSocketURL()
-    console.log('Connecting to WebSocket with User ID:', USER_ID)
     ws = new WebSocket(wsUrl)
 
     ws.onopen = handleWebSocketOpen
@@ -115,7 +138,6 @@ function connectWebSocket() {
     ws.onerror = handleWebSocketError
 
   } catch (error) {
-    console.error('WebSocket connection error:', error)
     updateStatus('Connection failed', 'disconnected')
     scheduleReconnect()
   }
@@ -123,13 +145,54 @@ function connectWebSocket() {
 
 // Handle WebSocket connection open
 function handleWebSocketOpen() {
-  console.log('WebSocket connected')
   isConnected = true
   updateStatus('Connected - Subscribing...', 'connecting')
 
   // Send subscription request using official format
-  console.log('Sending subscription request:', SUBSCRIPTION_REQUEST)
   ws.send(JSON.stringify(SUBSCRIPTION_REQUEST))
+}
+
+// Recursively decode nested MessagePack data
+function decodeNestedMessagePack(obj) {
+  if (obj && typeof obj === 'object' && obj.constructor === Uint8Array) {
+    // This is a Uint8Array, try to decode it as MessagePack
+    try {
+      const decoded = decode(obj)
+      return decodeNestedMessagePack(decoded) // Recursively decode in case of multiple levels
+    } catch (error) {
+      return obj // Return original if decoding fails
+    }
+  } else if (Array.isArray(obj)) {
+    // Process each array element
+    return obj.map(item => decodeNestedMessagePack(item))
+  } else if (obj && typeof obj === 'object') {
+    // Process each object property
+    const result = {}
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = decodeNestedMessagePack(value)
+    }
+    return result
+  } else {
+    // Primitive value, return as-is
+    return obj
+  }
+}
+
+// Parse MessagePack binary data
+function parseMessagePackData(buffer) {
+  try {
+    const uint8Array = new Uint8Array(buffer)
+    const decoded = decode(uint8Array)
+
+    // Recursively decode any nested MessagePack data
+    const fullyDecoded = decodeNestedMessagePack(decoded)
+
+    console.log('Decoded WebSocket data (all levels):', JSON.stringify(fullyDecoded, null, 2))
+
+    return fullyDecoded
+  } catch (error) {
+    return null
+  }
 }
 
 // Handle incoming WebSocket messages
@@ -138,111 +201,149 @@ function handleWebSocketMessage(event) {
     // Handle Blob data (binary MessagePack format)
     if (event.data instanceof Blob) {
       event.data.arrayBuffer().then(buffer => {
-        try {
-          const message = decode(new Uint8Array(buffer))
+        const message = parseMessagePackData(buffer)
+        if (message) {
           handleParsedMessage(message)
-        } catch (error) {
-          console.error('Error decoding MessagePack data:', error)
         }
-      }).catch(error => {
-        console.error('Error reading Blob data:', error)
       })
     } else if (event.data instanceof ArrayBuffer) {
       // Handle ArrayBuffer directly
-      try {
-        const message = decode(new Uint8Array(event.data))
+      const message = parseMessagePackData(event.data)
+      if (message) {
         handleParsedMessage(message)
-      } catch (error) {
-        console.error('Error decoding ArrayBuffer:', error)
       }
-    } else {
+    } else if (typeof event.data === 'string') {
       // Handle text data (JSON format)
       try {
         const message = JSON.parse(event.data)
         handleParsedMessage(message)
       } catch (error) {
-        console.error('Error parsing JSON message:', error)
-        console.log('Raw message data:', event.data)
+        // Ignore JSON parse errors
       }
     }
   } catch (error) {
-    console.error('Error handling WebSocket message:', error)
+    // Ignore WebSocket message errors
   }
 }
 
 // Handle parsed message content
 function handleParsedMessage(message) {
-  console.log('Received message:', message)
+  // Handle different message formats
 
-  switch (message.type) {
-    case 'connected':
-      console.log('Server connection confirmed:', message.message)
-      break
+  if (typeof message === 'object' && message !== null && message.type) {
+    switch (message.type) {
+      case 'connected':
+        break
 
-    case 'subscription':
-      if (message.status === 'success') {
-        console.log('Successfully subscribed to BTCUSDT candles')
-        updateStatus('Connected - Receiving data', 'connected')
-      } else {
-        console.error('Subscription failed:', message)
-        updateStatus('Subscription failed', 'disconnected')
-      }
-      break
-
-    case 'subscribe_response':
-      if (message.status === 'success') {
-        console.log('Successfully subscribed to BTCUSDT candles')
-        console.log('Subscription details:', message.data)
-        if (message.data && message.data.successful) {
-          console.log('Successful subscriptions:', message.data.successful)
+      case 'subscription':
+        if (message.status === 'success') {
+          updateStatus('Connected - Receiving data', 'connected')
+        } else {
+          updateStatus('Subscription failed', 'disconnected')
         }
-        updateStatus('Connected - Receiving data', 'connected')
-      } else {
-        console.error('Subscription failed:', message)
-        console.error('Error details:', message.data)
-        if (message.data && message.data.failed && message.data.failed.length > 0) {
-          console.error('Failed subscriptions:', message.data.failed)
-          message.data.failed.forEach(failure => {
-            console.error('Failure reason:', failure)
-          })
+        break
+
+      case 'subscribe_response':
+        if (message.status === 'success') {
+          updateStatus('Connected - Receiving data', 'connected')
+        } else {
+          updateStatus('Subscription failed', 'disconnected')
         }
-        updateStatus('Subscription failed', 'disconnected')
-      }
-      break
+        break
 
-    case 'candle':
-      handleCandleData(message.data)
-      break
-
-    default:
-      // According to documentation, candle data comes with type set to subscription topic
-      // Check if this might be candle data
-      if (message.type && message.data && Array.isArray(message.data)) {
-        console.log('Possible candle data received:', message)
+      case 'candle':
         handleCandleData(message.data)
-      } else {
-        console.log('Unknown message type:', message)
-      }
+        break
+
+      default:
+        // Check if this is candle data by looking for the subscription topic pattern
+        if (message.type && message.type.startsWith('candle.')) {
+          handleCandleData(message.data)
+        } else if (message.type && message.data && Array.isArray(message.data)) {
+          handleCandleData(message.data)
+        } else if (message.data && message.data.ex && message.data.sy && message.data.o) {
+          // ARCA API candle data format detected
+          handleCandleData(message.data)
+        }
+    }
+  } else if (Array.isArray(message)) {
+    // Handle case where the entire message is an array (possible direct candle data)
+    handleCandleData(message)
   }
 }
 
 // Handle candle data updates
 function handleCandleData(data) {
-  if (!data || !Array.isArray(data)) return
+  // Handle different data formats that might come from MessagePack
+  let candleArray = null
 
-  data.forEach(candle => {
+  if (Array.isArray(data)) {
+    candleArray = data
+  } else if (data && typeof data === 'object') {
+    // Check if data has a candles property or similar
+    if (data.candles && Array.isArray(data.candles)) {
+      candleArray = data.candles
+    } else if (data.data && Array.isArray(data.data)) {
+      candleArray = data.data
+    } else if (data.items && Array.isArray(data.items)) {
+      candleArray = data.items
+    } else if (data.ex && data.sy && data.o && data.h && data.l && data.c) {
+      // ARCA API single candle object format
+      candleArray = [data]
+    } else {
+      // Try to convert single object to array
+      candleArray = [data]
+    }
+  } else {
+    return
+  }
+
+  if (!candleArray || candleArray.length === 0) {
+    return
+  }
+
+  candleArray.forEach((candle, index) => {
+    // Handle different possible data formats
+    let timestamp, open, high, low, close, volume
+
+    if (Array.isArray(candle)) {
+      // If candle is an array: [timestamp, open, high, low, close, volume]
+      [timestamp, open, high, low, close, volume] = candle
+    } else if (typeof candle === 'object') {
+      // Handle ARCA API format and other common formats
+      timestamp = candle.st || candle.et || candle.timestamp || candle.time || candle.t
+      open = candle.o || candle.open
+      high = candle.h || candle.high
+      low = candle.l || candle.low
+      close = candle.c || candle.close
+      volume = candle.v || candle.volume || 0
+    } else {
+      return
+    }
+
     // Convert candle data to night-vision format: [timestamp, open, high, low, close, volume]
+    // Ensure timestamp is in milliseconds
+    let ts = parseInt(timestamp)
+    if (ts < 1000000000000) { // If timestamp is in seconds, convert to milliseconds
+      ts = ts * 1000
+    }
+
     const formattedCandle = [
-      candle.timestamp,
-      parseFloat(candle.open),
-      parseFloat(candle.high),
-      parseFloat(candle.low),
-      parseFloat(candle.close),
-      parseFloat(candle.volume || 0)
+      ts,
+      parseFloat(open),
+      parseFloat(high),
+      parseFloat(low),
+      parseFloat(close),
+      parseFloat(volume || 0)
     ]
 
+    // Validate the formatted candle
+    if (formattedCandle.some(val => isNaN(val))) {
+      return
+    }
+
     // Update or add candle data
-    const existingIndex = candleData.findIndex(c => c[0] === candle.timestamp)
+    const existingIndex = candleData.findIndex(c => c[0] === ts)
 
     if (existingIndex >= 0) {
       // Update existing candle
@@ -261,13 +362,16 @@ function handleCandleData(data) {
   // Sort by timestamp to ensure proper order
   candleData.sort((a, b) => a[0] - b[0])
 
-  // Update the chart
+  // Update the chart immediately for real-time data
+  dataUpdateCount++
   updateChart()
+
+  // Update status to show data is being received
+  updateStatus(`Connected - Receiving data (${dataUpdateCount} updates)`, 'connected')
 }
 
 // Handle WebSocket connection close
 function handleWebSocketClose(event) {
-  console.log('WebSocket connection closed:', event.code, event.reason)
   isConnected = false
   updateStatus('Disconnected', 'disconnected')
 
@@ -277,7 +381,6 @@ function handleWebSocketClose(event) {
 
 // Handle WebSocket errors
 function handleWebSocketError(error) {
-  console.error('WebSocket error:', error)
   updateStatus('Connection error', 'disconnected')
 }
 
@@ -293,7 +396,6 @@ function updateStatus(message, className) {
 // Schedule WebSocket reconnection
 function scheduleReconnect() {
   if (!isConnected) {
-    console.log('Scheduling reconnection in 5 seconds...')
     setTimeout(() => {
       if (!isConnected) {
         connectWebSocket()
@@ -305,8 +407,9 @@ function scheduleReconnect() {
 // Handle window resize
 function handleResize() {
   if (chart) {
-    // NightVision doesn't have a resize method, recreate the chart instead
-    initChart()
+    // Update chart dimensions without recreating the entire chart
+    chart.width = window.innerWidth - 40
+    chart.height = 600
   }
 }
 
